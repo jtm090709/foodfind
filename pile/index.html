@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>멜론 실시간 차트 (간단)</title>
+  <style>
+    :root { --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#06b6d4; --danger:#ef4444; --glass: rgba(255,255,255,0.03); }
+    html,body { height:100%; margin:0; font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans KR',sans-serif; background:linear-gradient(180deg,#071024 0%, #071a2b 100%); color:#e6eef6;}
+    .wrap { max-width:960px; margin:28px auto; padding:20px; }
+    header { display:flex; gap:16px; align-items:center; justify-content:space-between; margin-bottom:18px; }
+    h1 { margin:0; font-size:20px; letter-spacing:-0.02em; }
+    .controls { display:flex; gap:8px; align-items:center; }
+    button { background:var(--glass); border:1px solid rgba(255,255,255,0.04); color:inherit; padding:8px 10px; border-radius:8px; cursor:pointer; }
+    button.secondary { background:transparent; border:1px solid rgba(255,255,255,0.06); }
+    .status { font-size:13px; color:var(--muted); }
+    table { width:100%; border-collapse:collapse; background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:10px; overflow:hidden; box-shadow:0 6px 24px rgba(2,6,23,0.6); }
+    thead th { text-align:left; padding:12px 16px; font-size:13px; color:var(--muted); border-bottom:1px solid rgba(255,255,255,0.03); }
+    tbody tr { transition:background .15s ease; }
+    tbody tr:hover { background: rgba(255,255,255,0.02); }
+    td { padding:12px 16px; vertical-align:middle; font-size:15px; border-bottom:1px dashed rgba(255,255,255,0.02); }
+    .rank { width:56px; font-weight:700; font-size:16px; }
+    .title { font-weight:600; }
+    .artist { color:var(--muted); font-size:13px; }
+    .album { color:var(--muted); font-size:13px; }
+    .streams { text-align:right; width:120px; color:var(--muted); font-size:13px; }
+    .empty { padding:36px; text-align:center; color:var(--muted); }
+    footer { margin-top:14px; color:var(--muted); font-size:13px; }
+    @media (max-width:720px){
+      .wrap{padding:12px}
+      thead th:nth-child(4), td:nth-child(4){ display:none }
+      .streams { width:90px; font-size:12px }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>멜론 실시간 차트 (데모)</h1>
+        <div class="status" id="status">데이터 로드 전</div>
+      </div>
+      <div class="controls">
+        <button id="refreshBtn">지금 갱신</button>
+        <button id="toggleAuto" class="secondary">자동 갱신: ON</button>
+        <button id="downloadCSV" class="secondary">CSV 다운로드</button>
+      </div>
+    </header>
+
+    <main>
+      <table id="chartTable" aria-live="polite">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>곡 제목</th>
+            <th>아티스트</th>
+            <th>앨범</th>
+            <th class="streams">스트림/메모</th>
+          </tr>
+        </thead>
+        <tbody id="chartBody">
+          <tr><td colspan="5" class="empty">데이터 없음 — 우측 상단의 '지금 갱신'을 눌러 보세요.</td></tr>
+        </tbody>
+      </table>
+    </main>
+
+    <footer>
+      <div>설명: 이 HTML은 로컬에 실행 중인 멜론 프록시 백엔드 <code>http://localhost:4000/api/melon/realtime</code>를 호출합니다. 백엔드가 없다면 JSON을 반환하는 서버를 먼저 띄워주세요.</div>
+    </footer>
+  </div>
+
+  <script>
+    // 설정: API URL (필요시 변경)
+    const API_URL = 'http://localhost:4000/api/melon/realtime';
+    const REFRESH_INTERVAL = 10000; // 10초
+    let auto = true;
+    let timer = null;
+    const statusEl = document.getElementById('status');
+    const bodyEl = document.getElementById('chartBody');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const toggleAutoBtn = document.getElementById('toggleAuto');
+    const downloadBtn = document.getElementById('downloadCSV');
+
+    function setStatus(text, isError=false){
+      statusEl.textContent = text;
+      statusEl.style.color = isError ? '#fca5a5' : '';
+    }
+
+    function formatNumber(n){
+      if (n === undefined || n === null) return '-';
+      return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    function renderChart(rows){
+      bodyEl.innerHTML = '';
+      if (!rows || rows.length === 0){
+        bodyEl.innerHTML = '<tr><td colspan="5" class="empty">차트 데이터가 비어있습니다.</td></tr>';
+        return;
+      }
+      rows.forEach(item => {
+        const tr = document.createElement('tr');
+        const rank = document.createElement('td'); rank.className='rank'; rank.textContent = item.rank ?? '-';
+        const title = document.createElement('td'); title.innerHTML = `<div class="title">${escapeHtml(item.title ?? '-')}</div>`;
+        const artist = document.createElement('td'); artist.innerHTML = `<div class="artist">${escapeHtml(item.artist ?? '-')}</div>`;
+        const album = document.createElement('td'); album.innerHTML = `<div class="album">${escapeHtml(item.album ?? '-')}</div>`;
+        const streams = document.createElement('td'); streams.className='streams'; streams.textContent = item.streams ? formatNumber(item.streams) : (item.note ?? '-');
+        tr.appendChild(rank); tr.appendChild(title); tr.appendChild(artist); tr.appendChild(album); tr.appendChild(streams);
+        bodyEl.appendChild(tr);
+      });
+    }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    async function fetchChart(){
+      setStatus('로딩 중...');
+      try {
+        const res = await fetch(API_URL, { cache: 'no-store' });
+        if (!res.ok) throw new Error('API 오류 ' + res.status);
+        const json = await res.json();
+        // 예상 구조: { success: true, chart: [...] } 또는 단순 [...]. 유연하게 처리
+        let rows = [];
+        if (json === null) rows = [];
+        else if (Array.isArray(json)) rows = json;
+        else if (json.chart && Array.isArray(json.chart)) rows = json.chart;
+        else if (json.data && Array.isArray(json.data)) rows = json.data;
+        else {
+          // try to extract any array value
+          const arr = Object.values(json).find(v => Array.isArray(v));
+          rows = arr || [];
+        }
+        renderChart(rows);
+        const updated = json.updated ? new Date(json.updated).toLocaleTimeString() : (new Date()).toLocaleTimeString();
+        setStatus('최신: ' + updated);
+        return true;
+      } catch (err){
+        console.error(err);
+        setStatus('데이터 로드 실패 — 콘솔 확인', true);
+        bodyEl.innerHTML = '<tr><td colspan="5" class="empty">데이터를 불러오는 중 오류가 발생했습니다.<br>백엔드가 실행중인지, CORS 설정은 되어 있는지 확인하세요.</td></tr>';
+        return false;
+      }
+    }
+
+    function startAuto(){
+      stopAuto();
+      timer = setInterval(fetchChart, REFRESH_INTERVAL);
+      toggleAutoBtn.textContent = '자동 갱신: ON';
+      auto = true;
+    }
+    function stopAuto(){
+      if (timer) { clearInterval(timer); timer = null; }
+      toggleAutoBtn.textContent = '자동 갱신: OFF';
+      auto = false;
+    }
+
+    refreshBtn.addEventListener('click', () => fetchChart());
+    toggleAutoBtn.addEventListener('click', () => {
+      if (auto) stopAuto(); else startAuto();
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      // CSV export
+      const rows = Array.from(bodyEl.querySelectorAll('tr')).map(tr => {
+        return Array.from(tr.children).map(td => td.textContent.trim());
+      }).filter(r => r.length);
+      if (rows.length === 0) {
+        alert('내보낼 데이터가 없습니다.');
+        return;
+      }
+      const csv = rows.map(r => r.map(cell => `"${cell.replace(/"/g,'""')}"`).join(',')).join('\\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'melon_realtime_chart.csv'; document.body.appendChild(a); a.click();
+      a.remove(); URL.revokeObjectURL(url);
+    });
+
+    // 초기 실행
+    fetchChart().then(ok => {
+      if (ok && auto) startAuto();
+      else if (!ok) stopAuto();
+    });
+
+    // helpful: try to recover if backend returns CORS error by showing guidance
+    window.addEventListener('error', e => {
+      // do nothing special here; fetch errors are handled in fetchChart
+    });
+  </script>
+</body>
+</html>
